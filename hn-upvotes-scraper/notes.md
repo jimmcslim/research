@@ -11,3 +11,6 @@
 - Added configurable request throttling via `HN_REQUEST_DELAY_MS` (default 1000ms) to reduce load on Hacker News.
 - Replaced `DOMParser` usage with regex-based parsing so the CLI works in Bun runtime without extra dependencies.
 - Confirmed script now proceeds past runtime startup; with placeholder creds it reaches login page parsing and fails as expected in this environment.
+- Retested with network now available; confirmed HN login page currently does not include an `fnid` input.
+- Updated login flow to treat `fnid`/`goto` as optional hidden fields and proceed with acct/pw submission.
+- Verified runtime path now returns explicit login failure for invalid credentials instead of parser failure.

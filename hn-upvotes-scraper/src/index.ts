@@ -226,16 +226,18 @@ async function request(pathOrUrl: string, cookieJar: CookieJar, init: RequestIni
 async function login(cookieJar: CookieJar, username: string, password: string): Promise<void> {
   const loginPage = await request("/login", cookieJar, { method: "GET" });
   const loginHtml = await loginPage.text();
-  const fnidMatch = loginHtml.match(/<input\s+[^>]*name=['"]fnid['"][^>]*value=['"]([^'"]+)['"]/i);
-  const fnid = fnidMatch ? fnidMatch[1] : null;
-
-  if (!fnid) {
-    throw new Error("Could not find login form fnid. Hacker News login page format may have changed.");
-  }
 
   const form = new URLSearchParams();
-  form.set("fnid", fnid);
-  form.set("goto", "news");
+  const fnidMatch = loginHtml.match(/<input\s+[^>]*name=['"]fnid['"][^>]*value=['"]([^'"]+)['"]/i)
+    || loginHtml.match(/<input\s+[^>]*value=['"]([^'"]+)['"][^>]*name=['"]fnid['"]/i);
+  const gotoMatch = loginHtml.match(/<input\s+[^>]*name=['"]goto['"][^>]*value=['"]([^'"]+)['"]/i)
+    || loginHtml.match(/<input\s+[^>]*value=['"]([^'"]+)['"][^>]*name=['"]goto['"]/i);
+
+  if (fnidMatch?.[1]) {
+    form.set("fnid", fnidMatch[1]);
+  }
+
+  form.set("goto", gotoMatch?.[1] || "news");
   form.set("acct", username);
   form.set("pw", password);
 

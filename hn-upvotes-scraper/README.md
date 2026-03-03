@@ -22,6 +22,7 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 - Storage: **SQLite via `bun:sqlite`**
 - Parsing: lightweight HTML extraction with resilient regex selectors tuned for HN markup
 - Auth/session handling: custom cookie jar over `fetch`
+- Login handling: supports current HN login form where hidden `fnid` may be absent; includes it when present
 
 ## Research notes on existing libraries/tools
 
