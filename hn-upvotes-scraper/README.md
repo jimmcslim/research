@@ -6,6 +6,7 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 
 - Authenticates using `HN_USERNAME` and `HN_PASSWORD`
 - Reads credentials from environment variables and also from `.env`
+- Supports configurable request throttling via `HN_REQUEST_DELAY_MS` (defaults to `1000`)
 - Scrapes:
   - `https://news.ycombinator.com/upvoted?id=<username>`
   - `https://news.ycombinator.com/upvoted?id=<username>&comments=t`
@@ -19,7 +20,7 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 - Runtime: **Bun**
 - Language: **TypeScript**
 - Storage: **SQLite via `bun:sqlite`**
-- Parsing: Built-in `DOMParser` for HTML parsing
+- Parsing: lightweight HTML extraction with resilient regex selectors tuned for HN markup
 - Auth/session handling: custom cookie jar over `fetch`
 
 ## Research notes on existing libraries/tools
@@ -55,6 +56,7 @@ HN_USERNAME=your_username
 HN_PASSWORD=your_password
 # optional
 HN_DB_PATH=hn-upvotes.sqlite
+HN_REQUEST_DELAY_MS=1000
 ```
 
 3. Run:
@@ -95,3 +97,4 @@ bun run scrape
 
 - Hacker News markup can change; selectors may need updates.
 - If HN introduces anti-automation controls, login/scraping flow might require adjustments.
+- You can increase `HN_REQUEST_DELAY_MS` to be more conservative with request rate.

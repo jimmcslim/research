@@ -2,6 +2,10 @@ import { Database } from "bun:sqlite";
 
 const BASE_URL = "https://news.ycombinator.com";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 type SubmissionRecord = {
   itemId: number;
   title: string;
@@ -62,7 +66,7 @@ async function loadDotEnv(path = ".env") {
       if (!match) continue;
       const [, key, rawValue] = match;
       if (process.env[key]) continue;
-      const unquoted = rawValue.replace(/^['\"]|['\"]$/g, "");
+      const unquoted = rawValue.replace(/^['"]|['"]$/g, "");
       process.env[key] = unquoted;
     }
   } catch (error) {
@@ -78,76 +82,95 @@ function absoluteUrl(url: string | null): string | null {
   return `${BASE_URL}/${url.replace(/^\//, "")}`;
 }
 
+function htmlDecode(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, "/")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
+}
+
+function stripTags(value: string): string {
+  return htmlDecode(value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+function extractMoreLink(html: string): string | null {
+  const match = html.match(/<a\s+[^>]*class=["'][^"']*morelink[^"']*["'][^>]*href=["']([^"']+)["']/i)
+    || html.match(/<a\s+[^>]*href=["']([^"']+)["'][^>]*class=["'][^"']*morelink[^"']*["']/i);
+  return match ? absoluteUrl(htmlDecode(match[1])) : null;
+}
+
 function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  if (!doc) return [];
+  const records: SubmissionRecord[] = [];
+  const rowRegex = /<tr\s+class=['"]athing['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>\s*<tr[^>]*>[\s\S]*?<td\s+class=['"]subtext['"][\s\S]*?<\/td>[\s\S]*?<\/tr>/gi;
 
-  const rows = Array.from(doc.querySelectorAll("tr.athing"));
-  return rows.map((row) => {
-    const itemId = Number(row.getAttribute("id") || "0");
-    const titleLink = row.querySelector(".titleline > a") || row.querySelector(".title a");
-    const title = titleLink?.textContent?.trim() || "(untitled)";
-    const itemUrl = absoluteUrl(titleLink?.getAttribute("href") || null);
+  for (const blockMatch of html.matchAll(rowRegex)) {
+    const block = blockMatch[0];
+    const itemId = Number(blockMatch[1]);
 
-    const subtextRow = row.nextElementSibling;
-    const subtext = subtextRow?.querySelector(".subtext");
-    const points = Number((subtext?.querySelector(".score")?.textContent || "").replace(/\D+/g, "")) || null;
-    const author = subtext?.querySelector(".hnuser")?.textContent?.trim() || null;
-    const ageAnchor = subtext?.querySelector(".age > a") as HTMLAnchorElement | null;
-    const ageText = ageAnchor?.textContent?.trim() || null;
-    const ageUrl = absoluteUrl(ageAnchor?.getAttribute("href") || null);
+    const titleMatch = block.match(/<span\s+class=['"]titleline['"][\s\S]*?<a\s+href=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/<a\s+href=['"]([^'"]+)['"][^>]*class=['"][^'"]*titlelink[^'"]*['"][^>]*>([\s\S]*?)<\/a>/i);
 
-    const allLinks = Array.from(subtext?.querySelectorAll("a") || []);
-    const commentsAnchor = allLinks.find((a) => /comment/.test(a.textContent || ""));
-    const commentsCountRaw = commentsAnchor?.textContent?.replace(/\D+/g, "") || "";
+    const title = titleMatch ? stripTags(titleMatch[2]) : "(untitled)";
+    const itemUrl = titleMatch ? absoluteUrl(htmlDecode(titleMatch[1])) : null;
 
-    return {
+    const pointsMatch = block.match(/<span\s+class=['"]score['"][^>]*>(\d+)\s+points?<\/span>/i);
+    const authorMatch = block.match(/<a\s+href=['"]user\?id=[^'"]+['"][^>]*class=['"]hnuser['"][^>]*>([^<]+)<\/a>/i);
+    const ageMatch = block.match(/<span\s+class=['"]age['"][\s\S]*?<a\s+href=['"]([^'"]+)['"][^>]*>([^<]+)<\/a>/i);
+    const commentsMatch = block.match(/<a\s+href=['"]item\?id=\d+['"][^>]*>(\d+|discuss|\d+&nbsp;comments?|\d+\s+comments?)<\/a>/i);
+
+    const commentsText = commentsMatch ? stripTags(commentsMatch[1]).toLowerCase() : "";
+    const commentsCount = commentsText.includes("discuss")
+      ? 0
+      : Number((commentsText.match(/\d+/)?.[0] || "0"));
+
+    records.push({
       itemId,
       title,
       itemUrl,
       hnItemUrl: `${BASE_URL}/item?id=${itemId}`,
-      points,
-      author,
-      ageText,
-      ageUrl,
-      commentsCount: commentsCountRaw ? Number(commentsCountRaw) : 0,
+      points: pointsMatch ? Number(pointsMatch[1]) : null,
+      author: authorMatch ? authorMatch[1].trim() : null,
+      ageText: ageMatch ? ageMatch[2].trim() : null,
+      ageUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : null,
+      commentsCount,
       scrapedAt,
-    };
-  }).filter((s) => s.itemId > 0);
+    });
+  }
+
+  return records;
 }
 
 function parseComments(html: string, scrapedAt: string): CommentRecord[] {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  if (!doc) return [];
+  const records: CommentRecord[] = [];
+  const commentRegex = /<tr\s+class=['"]comtr['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>/gi;
 
-  const commentRows = Array.from(doc.querySelectorAll("tr.comtr"));
-  return commentRows.map((row) => {
-    const itemId = Number(row.getAttribute("id") || "0");
-    const author = row.querySelector(".hnuser")?.textContent?.trim() || null;
-    const ageAnchor = row.querySelector(".age > a") as HTMLAnchorElement | null;
-    const ageText = ageAnchor?.textContent?.trim() || null;
-    const ageUrl = absoluteUrl(ageAnchor?.getAttribute("href") || null);
+  for (const match of html.matchAll(commentRegex)) {
+    const block = match[0];
+    const itemId = Number(match[1]);
+    const authorMatch = block.match(/<a\s+href=['"]user\?id=[^'"]+['"][^>]*class=['"]hnuser['"][^>]*>([^<]+)<\/a>/i);
+    const ageMatch = block.match(/<span\s+class=['"]age['"][\s\S]*?<a\s+href=['"]([^'"]+)['"][^>]*>([^<]+)<\/a>/i);
+    const commtextMatch = block.match(/<span\s+class=['"]commtext[\s\S]*?['"][^>]*>([\s\S]*?)<\/span>/i);
+    const parentItemMatch = block.match(/<a\s+href=['"](item\?id=\d+)['"][^>]*>/i);
 
-    const commtext = row.querySelector(".commtext");
-    const commentHtml = commtext?.innerHTML?.trim() || "";
-    const commentText = commtext?.textContent?.trim() || "";
+    const commentHtml = commtextMatch ? commtextMatch[1].trim() : "";
 
-    const parentItemAnchor = Array.from(row.querySelectorAll("a")).find((a) => {
-      const href = a.getAttribute("href") || "";
-      return href.startsWith("item?id=");
-    });
-
-    return {
+    records.push({
       itemId,
-      author,
-      ageText,
-      ageUrl,
+      author: authorMatch ? authorMatch[1].trim() : null,
+      ageText: ageMatch ? ageMatch[2].trim() : null,
+      ageUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : null,
       commentHtml,
-      commentText,
-      parentItemUrl: absoluteUrl(parentItemAnchor?.getAttribute("href") || null),
+      commentText: stripTags(commentHtml),
+      parentItemUrl: parentItemMatch ? absoluteUrl(htmlDecode(parentItemMatch[1])) : null,
       scrapedAt,
-    };
-  }).filter((c) => c.itemId > 0);
+    });
+  }
+
+  return records;
 }
 
 function initDb(path: string): Database {
@@ -181,12 +204,21 @@ function initDb(path: string): Database {
 }
 
 async function request(pathOrUrl: string, cookieJar: CookieJar, init: RequestInit = {}): Promise<Response> {
+  const delayMs = Number(process.env.HN_REQUEST_DELAY_MS || "1000");
+  if (Number.isFinite(delayMs) && delayMs > 0) {
+    await sleep(delayMs);
+  }
+
   const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${BASE_URL}${pathOrUrl}`;
   const headers = new Headers(init.headers);
   const cookieHeader = cookieJar.headerValue();
   if (cookieHeader) headers.set("cookie", cookieHeader);
 
-  const res = await fetch(url, { ...init, headers, redirect: "manual" });
+  const res = await fetch(url, {
+    ...init,
+    headers,
+    redirect: "manual",
+  });
   cookieJar.addFromResponse(res.headers);
   return res;
 }
@@ -194,8 +226,8 @@ async function request(pathOrUrl: string, cookieJar: CookieJar, init: RequestIni
 async function login(cookieJar: CookieJar, username: string, password: string): Promise<void> {
   const loginPage = await request("/login", cookieJar, { method: "GET" });
   const loginHtml = await loginPage.text();
-  const doc = new DOMParser().parseFromString(loginHtml, "text/html");
-  const fnid = doc?.querySelector('input[name="fnid"]')?.getAttribute("value");
+  const fnidMatch = loginHtml.match(/<input\s+[^>]*name=['"]fnid['"][^>]*value=['"]([^'"]+)['"]/i);
+  const fnid = fnidMatch ? fnidMatch[1] : null;
 
   if (!fnid) {
     throw new Error("Could not find login form fnid. Hacker News login page format may have changed.");
@@ -299,10 +331,7 @@ async function fetchAllPages(startUrl: string, cookieJar: CookieJar): Promise<st
     const res = await request(next, cookieJar, { method: "GET" });
     const html = await res.text();
     pages.push(html);
-
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const more = doc?.querySelector("a.morelink")?.getAttribute("href") || null;
-    next = more ? absoluteUrl(more) : null;
+    next = extractMoreLink(html);
   }
 
   return pages;
@@ -316,6 +345,11 @@ async function main() {
 
   if (!username || !password) {
     throw new Error("Missing HN_USERNAME or HN_PASSWORD. Set env vars or provide them in a .env file.");
+  }
+
+  const requestDelayMs = Number(process.env.HN_REQUEST_DELAY_MS || "1000");
+  if (!Number.isFinite(requestDelayMs) || requestDelayMs < 0) {
+    throw new Error("HN_REQUEST_DELAY_MS must be a number >= 0.");
   }
 
   const dbPath = process.env.HN_DB_PATH || "hn-upvotes.sqlite";
@@ -334,7 +368,9 @@ async function main() {
   saveSubmissions(db, submissions);
   saveComments(db, comments);
 
-  console.log(`Saved ${submissions.length} submissions and ${comments.length} comments to ${dbPath}`);
+  console.log(
+    `Saved ${submissions.length} submissions and ${comments.length} comments to ${dbPath} (delay=${requestDelayMs}ms)`
+  );
   db.close();
 }
 
