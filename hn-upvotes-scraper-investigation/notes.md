@@ -62,3 +62,9 @@
 ## 2026-03-03 20:34:04 AEST
 - Moved non-credential runtime settings from environment variables to CLI flags (`--db-path`, `--request-delay-ms`, `--max-pages`, `--max-retries`, `--retry-base-ms`).
 - Restricted `.env` loading to `HN_USERNAME` and `HN_PASSWORD` only.
+
+## 2026-03-03 20:36:37 AEST
+- User requested a `--help` CLI argument.
+
+## 2026-03-03 20:36:56 AEST
+- Added `--help` with usage text and made it return before credential validation or network work.

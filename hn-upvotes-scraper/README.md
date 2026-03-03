@@ -70,6 +70,12 @@ bun run scrape -- \
   --retry-base-ms 2000
 ```
 
+To see CLI help:
+
+```bash
+bun run scrape -- --help
+```
+
 4. Inspect resulting SQLite file (`hn-upvotes.sqlite` by default).
 
 ### Runtime controls
@@ -79,6 +85,7 @@ bun run scrape -- \
 - `--max-pages`: maximum pages to scrape per resource (`0` means no cap)
 - `--max-retries`: retries for transient request failures / rate limits
 - `--retry-base-ms`: base backoff delay in milliseconds; doubles on each retry unless `Retry-After` is present
+- `--help`: print usage information
 
 ## Database schema
 

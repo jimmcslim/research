@@ -47,6 +47,7 @@ type RuntimeOptions = {
   maxPages: number;
   maxRetries: number;
   retryBaseMs: number;
+  showHelp: boolean;
 };
 
 class CookieJar {
@@ -236,6 +237,27 @@ function shouldRetryStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
+function printHelp(): void {
+  console.log(`HN Upvoted Scraper
+
+Usage:
+  bun run scrape -- [options]
+
+Credentials:
+  Provide credentials via environment variables or .env only:
+    HN_USERNAME
+    HN_PASSWORD
+
+Options:
+  --db-path <path>            SQLite output path (default: hn-upvotes.sqlite)
+  --request-delay-ms <ms>     Delay before each request (default: 1000)
+  --max-pages <count>         Maximum pages per resource, 0 = unlimited (default: 0)
+  --max-retries <count>       Retries for 429/5xx/network errors (default: 3)
+  --retry-base-ms <ms>        Base retry backoff in milliseconds (default: 2000)
+  --help                      Show this help text
+`);
+}
+
 function parseCliArgs(argv: string[]): RuntimeOptions {
   const options: RuntimeOptions = {
     dbPath: "hn-upvotes.sqlite",
@@ -243,11 +265,17 @@ function parseCliArgs(argv: string[]): RuntimeOptions {
     maxPages: 0,
     maxRetries: 3,
     retryBaseMs: 2000,
+    showHelp: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const nextValue = argv[i + 1];
+
+    if (arg === "--help") {
+      options.showHelp = true;
+      continue;
+    }
 
     if (arg === "--db-path") {
       if (!nextValue) throw new Error("Missing value for --db-path");
@@ -525,6 +553,10 @@ async function scrapePaginatedResource(
 async function main() {
   await loadDotEnv();
   const runtimeOptions = parseCliArgs(process.argv.slice(2));
+  if (runtimeOptions.showHelp) {
+    printHelp();
+    return;
+  }
   validateRuntimeOptions(runtimeOptions);
 
   const username = process.env.HN_USERNAME;
