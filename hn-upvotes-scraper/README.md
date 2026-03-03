@@ -5,7 +5,7 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 ## What it does
 
 - Authenticates using `HN_USERNAME` and `HN_PASSWORD`
-- Reads credentials from environment variables and also from `.env`
+- Reads credentials from environment variables, with Bun's native `.env` support
 - Parses Hacker News HTML with `cheerio`
 - Supports configurable request throttling via `--request-delay-ms` (defaults to `1000`)
 - Supports capped runs via `--max-pages` (defaults to unlimited)
@@ -24,7 +24,6 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 
 - `src/index.ts` — thin entrypoint
 - `src/cli.ts` — CLI options/help parsing
-- `src/env.ts` — credential loading from `.env`
 - `src/http.ts` — cookie jar, request, retry helpers
 - `src/auth.ts` — HN login flow
 - `src/parsers.ts` — pure HTML parsing with Cheerio

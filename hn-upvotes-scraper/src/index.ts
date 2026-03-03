@@ -1,12 +1,10 @@
 import { login } from "./auth";
 import { parseCliArgs, printHelp, validateRuntimeOptions } from "./cli";
 import { initDb } from "./db";
-import { loadCredentialsFromDotEnv } from "./env";
 import { CookieJar } from "./http";
 import { syncUpvotes } from "./sync";
 
 async function main() {
-  await loadCredentialsFromDotEnv();
   const runtimeOptions = parseCliArgs(process.argv.slice(2));
   if (runtimeOptions.showHelp) {
     printHelp();

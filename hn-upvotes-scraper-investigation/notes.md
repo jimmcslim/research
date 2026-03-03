@@ -124,3 +124,6 @@
 ## 2026-03-03 23:08:01 AEST
 - Split the monolithic entrypoint into parser, DB, CLI, env, auth/http, sync, and types modules.
 - Added Bun tests for fixture-based parsing, CLI parsing, and incremental stop-on-existing behavior.
+
+## 2026-03-03 23:15:00 AEST
+- Removed the custom env loader and now rely on Bun native .env handling directly via process.env.
