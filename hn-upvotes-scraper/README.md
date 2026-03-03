@@ -13,6 +13,7 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
   - `https://news.ycombinator.com/upvoted?id=<username>`
   - `https://news.ycombinator.com/upvoted?id=<username>&comments=t`
 - Follows pagination (`more` links)
+- Stops a resource early when it encounters an item already present in the local database
 - Upserts results into SQLite tables:
   - `submissions`
   - `comments`

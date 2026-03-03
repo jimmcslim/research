@@ -96,3 +96,9 @@
 
 ## 2026-03-03 21:39:47 AEST
 - Added `node_modules/` to `.gitignore`.
+
+## 2026-03-03 21:54:01 AEST
+- User requested default incremental-sync behavior: stop paginating a resource once an already-saved submission/comment is encountered.
+
+## 2026-03-03 21:54:27 AEST
+- Implemented default incremental-sync stopping: on each resource, the scraper stops paginating once it encounters an item already saved in SQLite.

@@ -34,6 +34,11 @@ type ScrapeCounts = {
   records: number;
 };
 
+type PageProcessResult = {
+  savedCount: number;
+  encounteredExisting: boolean;
+};
+
 type RetryOptions = {
   retries: number;
   baseDelayMs: number;
@@ -586,12 +591,37 @@ function saveComments(db: Database, comments: CommentRecord[]) {
   }
 }
 
+function splitAtExisting<T extends { itemId: number }>(
+  records: T[],
+  hasExistingRecord: (itemId: number) => boolean,
+): PageProcessResult & { newRecords: T[] } {
+  const newRecords: T[] = [];
+
+  for (const record of records) {
+    if (hasExistingRecord(record.itemId)) {
+      return {
+        newRecords,
+        savedCount: newRecords.length,
+        encounteredExisting: true,
+      };
+    }
+
+    newRecords.push(record);
+  }
+
+  return {
+    newRecords,
+    savedCount: newRecords.length,
+    encounteredExisting: false,
+  };
+}
+
 async function scrapePaginatedResource(
   label: string,
   startUrl: string,
   cookieJar: CookieJar,
   runtimeOptions: RuntimeOptions,
-  handlePage: (html: string) => number,
+  handlePage: (html: string) => PageProcessResult,
 ): Promise<ScrapeCounts> {
   let pageNumber = 0;
   let totalRecords = 0;
@@ -616,12 +646,17 @@ async function scrapePaginatedResource(
     }
 
     const html = await res.text();
-    const pageRecords = handlePage(html);
-    totalRecords += pageRecords;
+    const pageResult = handlePage(html);
+    totalRecords += pageResult.savedCount;
     next = extractMoreLink(html);
     console.log(
-      `[${label}] Scraped page ${pageNumber} (${pageRecords} records, ${totalRecords} total)`
+      `[${label}] Scraped page ${pageNumber} (${pageResult.savedCount} new records, ${totalRecords} total)`
     );
+
+    if (pageResult.encounteredExisting) {
+      console.log(`[${label}] Found an existing record on page ${pageNumber}; stopping pagination.`);
+      break;
+    }
   }
 
   return { pages: pageNumber, records: totalRecords };
@@ -645,6 +680,8 @@ async function main() {
   const cookieJar = new CookieJar();
   const db = initDb(runtimeOptions.dbPath);
   const scrapedAt = new Date().toISOString();
+  const submissionExists = db.query("SELECT 1 FROM submissions WHERE item_id = ? LIMIT 1");
+  const commentExists = db.query("SELECT 1 FROM comments WHERE item_id = ? LIMIT 1");
 
   console.log(
     `Starting scrape for HN user ${username} -> ${runtimeOptions.dbPath} `
@@ -662,8 +699,17 @@ async function main() {
     runtimeOptions,
     (html) => {
       const submissions = parseSubmissions(html, scrapedAt);
-      saveSubmissions(db, submissions);
-      return submissions.length;
+      const pageResult = splitAtExisting(
+        submissions,
+        (itemId) => Boolean(submissionExists.get(itemId)),
+      );
+      if (pageResult.newRecords.length > 0) {
+        saveSubmissions(db, pageResult.newRecords);
+      }
+      return {
+        savedCount: pageResult.savedCount,
+        encounteredExisting: pageResult.encounteredExisting,
+      };
     },
   );
   const commentsResult = await scrapePaginatedResource(
@@ -673,8 +719,17 @@ async function main() {
     runtimeOptions,
     (html) => {
       const comments = parseComments(html, scrapedAt);
-      saveComments(db, comments);
-      return comments.length;
+      const pageResult = splitAtExisting(
+        comments,
+        (itemId) => Boolean(commentExists.get(itemId)),
+      );
+      if (pageResult.newRecords.length > 0) {
+        saveComments(db, pageResult.newRecords);
+      }
+      return {
+        savedCount: pageResult.savedCount,
+        encounteredExisting: pageResult.encounteredExisting,
+      };
     },
   );
 
