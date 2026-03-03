@@ -6,7 +6,9 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 
 - Authenticates using `HN_USERNAME` and `HN_PASSWORD`
 - Reads credentials from environment variables and also from `.env`
-- Supports configurable request throttling via `HN_REQUEST_DELAY_MS` (defaults to `1000`)
+- Supports configurable request throttling via `--request-delay-ms` (defaults to `1000`)
+- Supports capped runs via `--max-pages` (defaults to unlimited)
+- Supports retry/backoff via `--max-retries` and `--retry-base-ms`
 - Scrapes:
   - `https://news.ycombinator.com/upvoted?id=<username>`
   - `https://news.ycombinator.com/upvoted?id=<username>&comments=t`
@@ -55,18 +57,28 @@ Or create a `.env` file in this folder:
 ```dotenv
 HN_USERNAME=your_username
 HN_PASSWORD=your_password
-# optional
-HN_DB_PATH=hn-upvotes.sqlite
-HN_REQUEST_DELAY_MS=1000
 ```
 
 3. Run:
 
 ```bash
-bun run scrape
+bun run scrape -- \
+  --db-path hn-upvotes.sqlite \
+  --request-delay-ms 1000 \
+  --max-pages 0 \
+  --max-retries 3 \
+  --retry-base-ms 2000
 ```
 
 4. Inspect resulting SQLite file (`hn-upvotes.sqlite` by default).
+
+### Runtime controls
+
+- `--db-path`: SQLite output path
+- `--request-delay-ms`: base delay before each request
+- `--max-pages`: maximum pages to scrape per resource (`0` means no cap)
+- `--max-retries`: retries for transient request failures / rate limits
+- `--retry-base-ms`: base backoff delay in milliseconds; doubles on each retry unless `Retry-After` is present
 
 ## Database schema
 
@@ -98,4 +110,5 @@ bun run scrape
 
 - Hacker News markup can change; selectors may need updates.
 - If HN introduces anti-automation controls, login/scraping flow might require adjustments.
-- You can increase `HN_REQUEST_DELAY_MS` to be more conservative with request rate.
+- You can increase `--request-delay-ms` to be more conservative with request rate.
+- If you encounter rate limiting, increase `--request-delay-ms`, reduce `--max-pages` for test runs, or leave retry/backoff enabled.

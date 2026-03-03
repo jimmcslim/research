@@ -30,6 +30,25 @@ type CommentRecord = {
   scrapedAt: string;
 };
 
+type ScrapeCounts = {
+  pages: number;
+  records: number;
+};
+
+type RetryOptions = {
+  retries: number;
+  baseDelayMs: number;
+  label: string;
+};
+
+type RuntimeOptions = {
+  dbPath: string;
+  requestDelayMs: number;
+  maxPages: number;
+  maxRetries: number;
+  retryBaseMs: number;
+};
+
 class CookieJar {
   private readonly cookies = new Map<string, string>();
 
@@ -65,6 +84,7 @@ async function loadDotEnv(path = ".env") {
       const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
       if (!match) continue;
       const [, key, rawValue] = match;
+      if (key !== "HN_USERNAME" && key !== "HN_PASSWORD") continue;
       if (process.env[key]) continue;
       const unquoted = rawValue.replace(/^['"]|['"]$/g, "");
       process.env[key] = unquoted;
@@ -202,10 +222,97 @@ function initDb(path: string): Database {
   return db;
 }
 
-async function request(pathOrUrl: string, cookieJar: CookieJar, init: RequestInit = {}): Promise<Response> {
-  const delayMs = Number(process.env.HN_REQUEST_DELAY_MS || "1000");
-  if (Number.isFinite(delayMs) && delayMs > 0) {
-    await sleep(delayMs);
+function getRetryDelayMs(res: Response | null, attempt: number, baseDelayMs: number): number {
+  const retryAfter = res?.headers.get("retry-after");
+  const retryAfterSeconds = retryAfter ? Number(retryAfter) : NaN;
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    return retryAfterSeconds * 1000;
+  }
+
+  return baseDelayMs * Math.max(1, 2 ** Math.max(0, attempt - 1));
+}
+
+function shouldRetryStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function parseCliArgs(argv: string[]): RuntimeOptions {
+  const options: RuntimeOptions = {
+    dbPath: "hn-upvotes.sqlite",
+    requestDelayMs: 1000,
+    maxPages: 0,
+    maxRetries: 3,
+    retryBaseMs: 2000,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const nextValue = argv[i + 1];
+
+    if (arg === "--db-path") {
+      if (!nextValue) throw new Error("Missing value for --db-path");
+      options.dbPath = nextValue;
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--request-delay-ms") {
+      if (!nextValue) throw new Error("Missing value for --request-delay-ms");
+      options.requestDelayMs = Number(nextValue);
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--max-pages") {
+      if (!nextValue) throw new Error("Missing value for --max-pages");
+      options.maxPages = Number(nextValue);
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--max-retries") {
+      if (!nextValue) throw new Error("Missing value for --max-retries");
+      options.maxRetries = Number(nextValue);
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--retry-base-ms") {
+      if (!nextValue) throw new Error("Missing value for --retry-base-ms");
+      options.retryBaseMs = Number(nextValue);
+      i += 1;
+      continue;
+    }
+
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return options;
+}
+
+function validateRuntimeOptions(options: RuntimeOptions): void {
+  if (!Number.isFinite(options.requestDelayMs) || options.requestDelayMs < 0) {
+    throw new Error("--request-delay-ms must be a number >= 0.");
+  }
+  if (!Number.isFinite(options.maxPages) || options.maxPages < 0) {
+    throw new Error("--max-pages must be a number >= 0.");
+  }
+  if (!Number.isFinite(options.maxRetries) || options.maxRetries < 0) {
+    throw new Error("--max-retries must be a number >= 0.");
+  }
+  if (!Number.isFinite(options.retryBaseMs) || options.retryBaseMs < 0) {
+    throw new Error("--retry-base-ms must be a number >= 0.");
+  }
+}
+
+async function request(
+  pathOrUrl: string,
+  cookieJar: CookieJar,
+  runtimeOptions: RuntimeOptions,
+  init: RequestInit = {},
+): Promise<Response> {
+  if (runtimeOptions.requestDelayMs > 0) {
+    await sleep(runtimeOptions.requestDelayMs);
   }
 
   const url = new URL(pathOrUrl, `${BASE_URL}/`).toString();
@@ -222,8 +329,60 @@ async function request(pathOrUrl: string, cookieJar: CookieJar, init: RequestIni
   return res;
 }
 
-async function login(cookieJar: CookieJar, username: string, password: string): Promise<void> {
-  const loginPage = await request("/login", cookieJar, { method: "GET" });
+async function requestWithRetry(
+  pathOrUrl: string,
+  cookieJar: CookieJar,
+  runtimeOptions: RuntimeOptions,
+  init: RequestInit,
+  options: RetryOptions,
+): Promise<Response> {
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
+
+    try {
+      const res = await request(pathOrUrl, cookieJar, runtimeOptions, init);
+      if (!shouldRetryStatus(res.status) || attempt > options.retries) {
+        return res;
+      }
+
+      const retryDelayMs = getRetryDelayMs(res, attempt, options.baseDelayMs);
+      console.log(
+        `[${options.label}] HTTP ${res.status} on attempt ${attempt}/${options.retries + 1}; `
+        + `retrying in ${retryDelayMs}ms`
+      );
+      await sleep(retryDelayMs);
+    } catch (error) {
+      if (attempt > options.retries) {
+        throw error;
+      }
+
+      const retryDelayMs = getRetryDelayMs(null, attempt, options.baseDelayMs);
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(
+        `[${options.label}] Request error on attempt ${attempt}/${options.retries + 1}: ${message}; `
+        + `retrying in ${retryDelayMs}ms`
+      );
+      await sleep(retryDelayMs);
+    }
+  }
+}
+
+async function login(
+  cookieJar: CookieJar,
+  username: string,
+  password: string,
+  runtimeOptions: RuntimeOptions,
+): Promise<void> {
+  const retryOptions = {
+    retries: runtimeOptions.maxRetries,
+    baseDelayMs: runtimeOptions.retryBaseMs,
+  };
+  const loginPage = await requestWithRetry("/login", cookieJar, runtimeOptions, { method: "GET" }, {
+    ...retryOptions,
+    label: "login",
+  });
   const loginHtml = await loginPage.text();
 
   const form = new URLSearchParams();
@@ -240,10 +399,13 @@ async function login(cookieJar: CookieJar, username: string, password: string): 
   form.set("acct", username);
   form.set("pw", password);
 
-  const loginRes = await request("/login", cookieJar, {
+  const loginRes = await requestWithRetry("/login", cookieJar, runtimeOptions, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: form.toString(),
+  }, {
+    ...retryOptions,
+    label: "login",
   });
 
   const location = loginRes.headers.get("location") || "";
@@ -251,7 +413,10 @@ async function login(cookieJar: CookieJar, username: string, password: string): 
     throw new Error("Login failed. Verify HN_USERNAME and HN_PASSWORD.");
   }
 
-  await request(location, cookieJar, { method: "GET" });
+  await requestWithRetry(location, cookieJar, runtimeOptions, { method: "GET" }, {
+    ...retryOptions,
+    label: "login",
+  });
 }
 
 function saveSubmissions(db: Database, submissions: SubmissionRecord[]) {
@@ -271,24 +436,20 @@ function saveSubmissions(db: Database, submissions: SubmissionRecord[]) {
       scraped_at=excluded.scraped_at;
   `);
 
-  const tx = db.transaction((records: SubmissionRecord[]) => {
-    for (const row of records) {
-      insert.run(
-        row.itemId,
-        row.title,
-        row.itemUrl,
-        row.hnItemUrl,
-        row.points,
-        row.author,
-        row.ageText,
-        row.ageUrl,
-        row.commentsCount,
-        row.scrapedAt,
-      );
-    }
-  });
-
-  tx(submissions);
+  for (const row of submissions) {
+    insert.run(
+      row.itemId,
+      row.title,
+      row.itemUrl,
+      row.hnItemUrl,
+      row.points,
+      row.author,
+      row.ageText,
+      row.ageUrl,
+      row.commentsCount,
+      row.scrapedAt,
+    );
+  }
 }
 
 function saveComments(db: Database, comments: CommentRecord[]) {
@@ -306,40 +467,65 @@ function saveComments(db: Database, comments: CommentRecord[]) {
       scraped_at=excluded.scraped_at;
   `);
 
-  const tx = db.transaction((records: CommentRecord[]) => {
-    for (const row of records) {
-      insert.run(
-        row.itemId,
-        row.author,
-        row.ageText,
-        row.ageUrl,
-        row.commentHtml,
-        row.commentText,
-        row.parentItemUrl,
-        row.scrapedAt,
-      );
-    }
-  });
-
-  tx(comments);
+  for (const row of comments) {
+    insert.run(
+      row.itemId,
+      row.author,
+      row.ageText,
+      row.ageUrl,
+      row.commentHtml,
+      row.commentText,
+      row.parentItemUrl,
+      row.scrapedAt,
+    );
+  }
 }
 
-async function fetchAllPages(startUrl: string, cookieJar: CookieJar): Promise<string[]> {
-  const pages: string[] = [];
+async function scrapePaginatedResource(
+  label: string,
+  startUrl: string,
+  cookieJar: CookieJar,
+  runtimeOptions: RuntimeOptions,
+  handlePage: (html: string) => number,
+): Promise<ScrapeCounts> {
+  let pageNumber = 0;
+  let totalRecords = 0;
   let next: string | null = startUrl;
 
   while (next) {
-    const res = await request(next, cookieJar, { method: "GET" });
+    if (runtimeOptions.maxPages > 0 && pageNumber >= runtimeOptions.maxPages) {
+      console.log(`[${label}] Reached --max-pages=${runtimeOptions.maxPages}; stopping pagination.`);
+      break;
+    }
+
+    pageNumber += 1;
+    console.log(`[${label}] Fetching page ${pageNumber}: ${next}`);
+    const res = await requestWithRetry(next, cookieJar, runtimeOptions, { method: "GET" }, {
+      retries: runtimeOptions.maxRetries,
+      baseDelayMs: runtimeOptions.retryBaseMs,
+      label: `${label}:page-${pageNumber}`,
+    });
+
+    if (!res.ok) {
+      throw new Error(`[${label}] Request failed for page ${pageNumber}: HTTP ${res.status}`);
+    }
+
     const html = await res.text();
-    pages.push(html);
+    const pageRecords = handlePage(html);
+    totalRecords += pageRecords;
     next = extractMoreLink(html);
+    console.log(
+      `[${label}] Scraped page ${pageNumber} (${pageRecords} records, ${totalRecords} total)`
+    );
   }
 
-  return pages;
+  return { pages: pageNumber, records: totalRecords };
 }
 
 async function main() {
   await loadDotEnv();
+  const runtimeOptions = parseCliArgs(process.argv.slice(2));
+  validateRuntimeOptions(runtimeOptions);
 
   const username = process.env.HN_USERNAME;
   const password = process.env.HN_PASSWORD;
@@ -347,30 +533,46 @@ async function main() {
   if (!username || !password) {
     throw new Error("Missing HN_USERNAME or HN_PASSWORD. Set env vars or provide them in a .env file.");
   }
-
-  const requestDelayMs = Number(process.env.HN_REQUEST_DELAY_MS || "1000");
-  if (!Number.isFinite(requestDelayMs) || requestDelayMs < 0) {
-    throw new Error("HN_REQUEST_DELAY_MS must be a number >= 0.");
-  }
-
-  const dbPath = process.env.HN_DB_PATH || "hn-upvotes.sqlite";
   const cookieJar = new CookieJar();
-  const db = initDb(dbPath);
+  const db = initDb(runtimeOptions.dbPath);
   const scrapedAt = new Date().toISOString();
 
-  await login(cookieJar, username, password);
+  console.log(
+    `Starting scrape for HN user ${username} -> ${runtimeOptions.dbPath} `
+    + `(delay=${runtimeOptions.requestDelayMs}ms, maxPages=${runtimeOptions.maxPages || "all"}, `
+    + `maxRetries=${runtimeOptions.maxRetries}, retryBase=${runtimeOptions.retryBaseMs}ms)`
+  );
+  console.log("Logging into Hacker News...");
+  await login(cookieJar, username, password, runtimeOptions);
+  console.log("Login succeeded.");
 
-  const submissionsPages = await fetchAllPages(`${BASE_URL}/upvoted?id=${encodeURIComponent(username)}`, cookieJar);
-  const commentsPages = await fetchAllPages(`${BASE_URL}/upvoted?id=${encodeURIComponent(username)}&comments=t`, cookieJar);
-
-  const submissions = submissionsPages.flatMap((html) => parseSubmissions(html, scrapedAt));
-  const comments = commentsPages.flatMap((html) => parseComments(html, scrapedAt));
-
-  saveSubmissions(db, submissions);
-  saveComments(db, comments);
+  const submissionsResult = await scrapePaginatedResource(
+    "submissions",
+    `${BASE_URL}/upvoted?id=${encodeURIComponent(username)}`,
+    cookieJar,
+    runtimeOptions,
+    (html) => {
+      const submissions = parseSubmissions(html, scrapedAt);
+      saveSubmissions(db, submissions);
+      return submissions.length;
+    },
+  );
+  const commentsResult = await scrapePaginatedResource(
+    "comments",
+    `${BASE_URL}/upvoted?id=${encodeURIComponent(username)}&comments=t`,
+    cookieJar,
+    runtimeOptions,
+    (html) => {
+      const comments = parseComments(html, scrapedAt);
+      saveComments(db, comments);
+      return comments.length;
+    },
+  );
 
   console.log(
-    `Saved ${submissions.length} submissions and ${comments.length} comments to ${dbPath} (delay=${requestDelayMs}ms)`
+    `Completed scrape: ${submissionsResult.records} submissions across ${submissionsResult.pages} pages; `
+    + `${commentsResult.records} comments across ${commentsResult.pages} pages; `
+    + `saved to ${runtimeOptions.dbPath}`
   );
   db.close();
 }

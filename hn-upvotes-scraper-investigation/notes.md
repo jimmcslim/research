@@ -40,3 +40,25 @@
 
 ## 2026-03-03 10:52:52 AEST
 - Rewrote README.md after a placeholder write left it incomplete.
+
+## 2026-03-03 12:42:08 AEST
+- User requested direct follow-up changes in the original repo: ignore the SQLite DB, scrape/write per page, remove transaction batching, and add progress logging.
+
+## 2026-03-03 17:56:39 AEST
+- Added `.gitignore` for `hn-upvotes.sqlite`.
+- Reworked the scraper to fetch, parse, and persist one page at a time, with cumulative page/record logging.
+- Removed the array-level SQLite transaction wrappers from submission/comment upserts.
+
+## 2026-03-03 20:29:36 AEST
+- User requested retry/backoff and a max-pages option in the original scraper.
+
+## 2026-03-03 20:30:19 AEST
+- Added `HN_MAX_PAGES`, `HN_MAX_RETRIES`, and `HN_RETRY_BASE_MS`.
+- Implemented retry/backoff for request errors, 429s, and 5xx responses, with `Retry-After` support.
+
+## 2026-03-03 20:32:57 AEST
+- User requested that only credentials remain in environment variables; all other runtime controls should move to CLI arguments.
+
+## 2026-03-03 20:34:04 AEST
+- Moved non-credential runtime settings from environment variables to CLI flags (`--db-path`, `--request-delay-ms`, `--max-pages`, `--max-retries`, `--retry-base-ms`).
+- Restricted `.env` loading to `HN_USERNAME` and `HN_PASSWORD` only.
