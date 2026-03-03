@@ -9,21 +9,20 @@ function sleep(ms: number): Promise<void> {
 type SubmissionRecord = {
   itemId: number;
   title: string;
+  sourceUrl: string | null;
   itemUrl: string | null;
-  hnItemUrl: string;
   points: number | null;
-  author: string | null;
-  ageText: string | null;
-  ageUrl: string | null;
+  submittedBy: string | null;
+  submittedAt: string | null;
   commentsCount: number | null;
   scrapedAt: string;
 };
 
 type CommentRecord = {
   itemId: number;
-  author: string | null;
-  ageText: string | null;
-  ageUrl: string | null;
+  submittedBy: string | null;
+  submittedAt: string | null;
+  itemUrl: string | null;
   commentHtml: string;
   commentText: string;
   parentItemUrl: string | null;
@@ -123,6 +122,15 @@ function extractMoreLink(html: string): string | null {
   return match ? absoluteUrl(htmlDecode(match[1])) : null;
 }
 
+function extractSubmittedAt(block: string): string | null {
+  const ageTitleMatch = block.match(/<span\s+class=['"]age['"][^>]*title=['"]([^'"]+)['"]/i)
+    || block.match(/title=['"]([^'"]+)['"][^>]*class=['"]age['"]/i);
+  if (!ageTitleMatch?.[1]) return null;
+
+  const isoTimestamp = ageTitleMatch[1].trim().split(/\s+/)[0];
+  return isoTimestamp || null;
+}
+
 function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
   const records: SubmissionRecord[] = [];
   const rowRegex = /<tr\s+class=['"][^'"]*\bathing\b[^'"]*['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>\s*<tr[^>]*>[\s\S]*?<td\s+class=['"]subtext['"][\s\S]*?<\/td>[\s\S]*?<\/tr>/gi;
@@ -135,7 +143,7 @@ function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
       || block.match(/<a\s+href=['"]([^'"]+)['"][^>]*class=['"][^'"]*titlelink[^'"]*['"][^>]*>([\s\S]*?)<\/a>/i);
 
     const title = titleMatch ? stripTags(titleMatch[2]) : "(untitled)";
-    const itemUrl = titleMatch ? absoluteUrl(htmlDecode(titleMatch[1])) : null;
+    const sourceUrl = titleMatch ? absoluteUrl(htmlDecode(titleMatch[1])) : null;
 
     const pointsMatch = block.match(/<span\s+class=['"]score['"][^>]*>(\d+)\s+points?<\/span>/i);
     const authorMatch = block.match(/<a\s+href=['"]user\?id=[^'"]+['"][^>]*class=['"]hnuser['"][^>]*>([^<]+)<\/a>/i);
@@ -150,12 +158,11 @@ function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
     records.push({
       itemId,
       title,
-      itemUrl,
-      hnItemUrl: `${BASE_URL}/item?id=${itemId}`,
+      sourceUrl,
+      itemUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : `${BASE_URL}/item?id=${itemId}`,
       points: pointsMatch ? Number(pointsMatch[1]) : null,
-      author: authorMatch ? authorMatch[1].trim() : null,
-      ageText: ageMatch ? ageMatch[2].trim() : null,
-      ageUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : null,
+      submittedBy: authorMatch ? authorMatch[1].trim() : null,
+      submittedAt: extractSubmittedAt(block),
       commentsCount,
       scrapedAt,
     });
@@ -180,9 +187,9 @@ function parseComments(html: string, scrapedAt: string): CommentRecord[] {
 
     records.push({
       itemId,
-      author: authorMatch ? authorMatch[1].trim() : null,
-      ageText: ageMatch ? ageMatch[2].trim() : null,
-      ageUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : null,
+      submittedBy: authorMatch ? authorMatch[1].trim() : null,
+      submittedAt: extractSubmittedAt(block),
+      itemUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : null,
       commentHtml,
       commentText: stripTags(commentHtml),
       parentItemUrl: parentItemMatch ? absoluteUrl(htmlDecode(parentItemMatch[1])) : null,
@@ -193,33 +200,105 @@ function parseComments(html: string, scrapedAt: string): CommentRecord[] {
   return records;
 }
 
-function initDb(path: string): Database {
-  const db = new Database(path);
+function getTableColumns(db: Database, tableName: string): string[] {
+  const rows = db.query(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: string }>;
+  return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
+}
+
+function createSubmissionsTable(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS submissions (
       item_id INTEGER PRIMARY KEY,
       title TEXT NOT NULL,
+      source_url TEXT,
       item_url TEXT,
-      hn_item_url TEXT NOT NULL,
       points INTEGER,
-      author TEXT,
-      age_text TEXT,
-      age_url TEXT,
+      submitted_by TEXT,
+      submitted_at TEXT,
       comments_count INTEGER,
       scraped_at TEXT NOT NULL
     );
+  `);
+}
 
+function createCommentsTable(db: Database): void {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS comments (
       item_id INTEGER PRIMARY KEY,
-      author TEXT,
-      age_text TEXT,
-      age_url TEXT,
+      submitted_by TEXT,
+      submitted_at TEXT,
+      item_url TEXT,
       comment_html TEXT NOT NULL,
       comment_text TEXT NOT NULL,
       parent_item_url TEXT,
       scraped_at TEXT NOT NULL
     );
   `);
+}
+
+function migrateLegacySubmissionsTable(db: Database): void {
+  const columns = getTableColumns(db, "submissions");
+  if (columns.length === 0 || columns.includes("source_url")) {
+    createSubmissionsTable(db);
+    return;
+  }
+
+  db.exec(`
+    ALTER TABLE submissions RENAME TO submissions_legacy;
+  `);
+  createSubmissionsTable(db);
+  db.exec(`
+    INSERT INTO submissions (
+      item_id, title, source_url, item_url, points, submitted_by, submitted_at, comments_count, scraped_at
+    )
+    SELECT
+      item_id,
+      title,
+      item_url,
+      COALESCE(age_url, hn_item_url),
+      points,
+      author,
+      NULL,
+      comments_count,
+      scraped_at
+    FROM submissions_legacy;
+    DROP TABLE submissions_legacy;
+  `);
+}
+
+function migrateLegacyCommentsTable(db: Database): void {
+  const columns = getTableColumns(db, "comments");
+  if (columns.length === 0 || columns.includes("submitted_by")) {
+    createCommentsTable(db);
+    return;
+  }
+
+  db.exec(`
+    ALTER TABLE comments RENAME TO comments_legacy;
+  `);
+  createCommentsTable(db);
+  db.exec(`
+    INSERT INTO comments (
+      item_id, submitted_by, submitted_at, item_url, comment_html, comment_text, parent_item_url, scraped_at
+    )
+    SELECT
+      item_id,
+      author,
+      NULL,
+      age_url,
+      comment_html,
+      comment_text,
+      parent_item_url,
+      scraped_at
+    FROM comments_legacy;
+    DROP TABLE comments_legacy;
+  `);
+}
+
+function initDb(path: string): Database {
+  const db = new Database(path);
+  migrateLegacySubmissionsTable(db);
+  migrateLegacyCommentsTable(db);
   return db;
 }
 
@@ -450,16 +529,15 @@ async function login(
 function saveSubmissions(db: Database, submissions: SubmissionRecord[]) {
   const insert = db.prepare(`
     INSERT INTO submissions (
-      item_id, title, item_url, hn_item_url, points, author, age_text, age_url, comments_count, scraped_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      item_id, title, source_url, item_url, points, submitted_by, submitted_at, comments_count, scraped_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(item_id) DO UPDATE SET
       title=excluded.title,
+      source_url=excluded.source_url,
       item_url=excluded.item_url,
-      hn_item_url=excluded.hn_item_url,
       points=excluded.points,
-      author=excluded.author,
-      age_text=excluded.age_text,
-      age_url=excluded.age_url,
+      submitted_by=excluded.submitted_by,
+      submitted_at=excluded.submitted_at,
       comments_count=excluded.comments_count,
       scraped_at=excluded.scraped_at;
   `);
@@ -468,12 +546,11 @@ function saveSubmissions(db: Database, submissions: SubmissionRecord[]) {
     insert.run(
       row.itemId,
       row.title,
+      row.sourceUrl,
       row.itemUrl,
-      row.hnItemUrl,
       row.points,
-      row.author,
-      row.ageText,
-      row.ageUrl,
+      row.submittedBy,
+      row.submittedAt,
       row.commentsCount,
       row.scrapedAt,
     );
@@ -483,12 +560,12 @@ function saveSubmissions(db: Database, submissions: SubmissionRecord[]) {
 function saveComments(db: Database, comments: CommentRecord[]) {
   const insert = db.prepare(`
     INSERT INTO comments (
-      item_id, author, age_text, age_url, comment_html, comment_text, parent_item_url, scraped_at
+      item_id, submitted_by, submitted_at, item_url, comment_html, comment_text, parent_item_url, scraped_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(item_id) DO UPDATE SET
-      author=excluded.author,
-      age_text=excluded.age_text,
-      age_url=excluded.age_url,
+      submitted_by=excluded.submitted_by,
+      submitted_at=excluded.submitted_at,
+      item_url=excluded.item_url,
       comment_html=excluded.comment_html,
       comment_text=excluded.comment_text,
       parent_item_url=excluded.parent_item_url,
@@ -498,9 +575,9 @@ function saveComments(db: Database, comments: CommentRecord[]) {
   for (const row of comments) {
     insert.run(
       row.itemId,
-      row.author,
-      row.ageText,
-      row.ageUrl,
+      row.submittedBy,
+      row.submittedAt,
+      row.itemUrl,
       row.commentHtml,
       row.commentText,
       row.parentItemUrl,

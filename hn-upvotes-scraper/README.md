@@ -93,21 +93,20 @@ bun run scrape -- --help
 
 - `item_id` (PK)
 - `title`
+- `source_url`
 - `item_url`
-- `hn_item_url`
 - `points`
-- `author`
-- `age_text`
-- `age_url`
+- `submitted_by`
+- `submitted_at`
 - `comments_count`
 - `scraped_at`
 
 ### `comments`
 
 - `item_id` (PK)
-- `author`
-- `age_text`
-- `age_url`
+- `submitted_by`
+- `submitted_at`
+- `item_url`
 - `comment_html`
 - `comment_text`
 - `parent_item_url`

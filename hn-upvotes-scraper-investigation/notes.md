@@ -75,3 +75,24 @@
 ## 2026-03-03 20:44:29 AEST
 - Root cause for zero submission rows: the parser required `class="athing"` exactly, but live submission rows are `class="athing submission"`.
 - Relaxed both submission and comment row regexes to match `athing` as a class token instead of an exact class value.
+
+## 2026-03-03 21:00:20 AEST
+- User requested schema/field renames: `item_url -> source_url`, `age_url -> item_url`, `author -> submitted_by`, and `age_text -> submitted_at` using the ISO timestamp from the age title attribute.
+- Existing SQLite files need migration logic so the renamed columns do not break runs against an existing database.
+
+## 2026-03-03 21:01:21 AEST
+- Renamed schema/record fields and added a lightweight SQLite migration path for legacy databases.
+- Legacy rows migrated from the old schema keep URL/author data, but `submitted_at` is initialized to NULL because the old DB did not store the age title timestamp.
+
+## 2026-03-03 21:37:23 AEST
+- User requested proper Bun/Node type setup so `bunx tsc --noEmit` works in the scraper repo.
+
+## 2026-03-03 21:38:04 AEST
+- Installed `@types/bun` and `@types/node`, added explicit `types` entries to `tsconfig.json`, and added a `typecheck` script.
+- Verified the repo now supports `bun run typecheck` successfully.
+
+## 2026-03-03 21:39:35 AEST
+- User requested ignoring `node_modules` in the scraper repo `.gitignore`.
+
+## 2026-03-03 21:39:47 AEST
+- Added `node_modules/` to `.gitignore`.
