@@ -9,6 +9,7 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 - Supports configurable request throttling via `--request-delay-ms` (defaults to `1000`)
 - Supports capped runs via `--max-pages` (defaults to unlimited)
 - Supports retry/backoff via `--max-retries` and `--retry-base-ms`
+- Supports full reprocessing via `--refresh`
 - Scrapes:
   - `https://news.ycombinator.com/upvoted?id=<username>`
   - `https://news.ycombinator.com/upvoted?id=<username>&comments=t`
@@ -68,7 +69,8 @@ bun run scrape -- \
   --request-delay-ms 1000 \
   --max-pages 0 \
   --max-retries 3 \
-  --retry-base-ms 2000
+  --retry-base-ms 2000 \
+  --refresh
 ```
 
 To see CLI help:
@@ -86,6 +88,7 @@ bun run scrape -- --help
 - `--max-pages`: maximum pages to scrape per resource (`0` means no cap)
 - `--max-retries`: retries for transient request failures / rate limits
 - `--retry-base-ms`: base backoff delay in milliseconds; doubles on each retry unless `Retry-After` is present
+- `--refresh`: delete existing local scraper data and process all pages again
 - `--help`: print usage information
 
 ## Database schema

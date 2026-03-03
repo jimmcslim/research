@@ -102,3 +102,18 @@
 
 ## 2026-03-03 21:54:27 AEST
 - Implemented default incremental-sync stopping: on each resource, the scraper stops paginating once it encounters an item already saved in SQLite.
+
+## 2026-03-03 22:30:32 AEST
+- User requested a `--refresh` mode that deletes existing scraper data and reprocesses everything instead of stopping on existing rows.
+
+## 2026-03-03 22:30:58 AEST
+- Added `--refresh`, which clears both tables before scraping and disables the stop-on-existing shortcut for that run.
+
+## 2026-03-03 22:47:57 AEST
+- User reported some `submitted_by` values coming through blank despite a visible submitter in the page; inspecting updated sample markup.
+
+## 2026-03-03 22:48:21 AEST
+- Fixed `submitted_by` extraction for usernames wrapped in nested markup like `<font>` inside the `a.hnuser` link.
+
+## 2026-03-03 22:48:56 AEST
+- Tightened the `submitted_by` fix further: HN can split closing user links as `</a` followed by whitespace/newline before `>`, so the parser now accepts `</a\\s*>`.

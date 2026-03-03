@@ -51,6 +51,7 @@ type RuntimeOptions = {
   maxPages: number;
   maxRetries: number;
   retryBaseMs: number;
+  refresh: boolean;
   showHelp: boolean;
 };
 
@@ -136,6 +137,16 @@ function extractSubmittedAt(block: string): string | null {
   return isoTimestamp || null;
 }
 
+function extractSubmittedBy(block: string): string | null {
+  const authorMatch = block.match(
+    /<a\s+href=['"]user\?id=[^'"]+['"][^>]*class=['"]hnuser['"][^>]*>([\s\S]*?)<\/a\s*>/i,
+  );
+  if (!authorMatch?.[1]) return null;
+
+  const author = stripTags(authorMatch[1]);
+  return author || null;
+}
+
 function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
   const records: SubmissionRecord[] = [];
   const rowRegex = /<tr\s+class=['"][^'"]*\bathing\b[^'"]*['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>\s*<tr[^>]*>[\s\S]*?<td\s+class=['"]subtext['"][\s\S]*?<\/td>[\s\S]*?<\/tr>/gi;
@@ -151,7 +162,6 @@ function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
     const sourceUrl = titleMatch ? absoluteUrl(htmlDecode(titleMatch[1])) : null;
 
     const pointsMatch = block.match(/<span\s+class=['"]score['"][^>]*>(\d+)\s+points?<\/span>/i);
-    const authorMatch = block.match(/<a\s+href=['"]user\?id=[^'"]+['"][^>]*class=['"]hnuser['"][^>]*>([^<]+)<\/a>/i);
     const ageMatch = block.match(/<span\s+class=['"]age['"][\s\S]*?<a\s+href=['"]([^'"]+)['"][^>]*>([^<]+)<\/a>/i);
     const commentsMatch = block.match(/<a\s+href=['"]item\?id=\d+['"][^>]*>(\d+|discuss|\d+&nbsp;comments?|\d+\s+comments?)<\/a>/i);
 
@@ -166,7 +176,7 @@ function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
       sourceUrl,
       itemUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : `${BASE_URL}/item?id=${itemId}`,
       points: pointsMatch ? Number(pointsMatch[1]) : null,
-      submittedBy: authorMatch ? authorMatch[1].trim() : null,
+      submittedBy: extractSubmittedBy(block),
       submittedAt: extractSubmittedAt(block),
       commentsCount,
       scrapedAt,
@@ -183,7 +193,6 @@ function parseComments(html: string, scrapedAt: string): CommentRecord[] {
   for (const match of html.matchAll(commentRegex)) {
     const block = match[0];
     const itemId = Number(match[1]);
-    const authorMatch = block.match(/<a\s+href=['"]user\?id=[^'"]+['"][^>]*class=['"]hnuser['"][^>]*>([^<]+)<\/a>/i);
     const ageMatch = block.match(/<span\s+class=['"]age['"][\s\S]*?<a\s+href=['"]([^'"]+)['"][^>]*>([^<]+)<\/a>/i);
     const commtextMatch = block.match(/<(?:div|span)\s+class=['"][^'"]*commtext[^'"]*['"][^>]*>([\s\S]*?)<\/(?:div|span)>/i);
     const parentItemMatch = block.match(/<span\s+class=['"]onstory['"][\s\S]*?<a\s+href=['"](item\?id=\d+)['"][^>]*>/i);
@@ -192,7 +201,7 @@ function parseComments(html: string, scrapedAt: string): CommentRecord[] {
 
     records.push({
       itemId,
-      submittedBy: authorMatch ? authorMatch[1].trim() : null,
+      submittedBy: extractSubmittedBy(block),
       submittedAt: extractSubmittedAt(block),
       itemUrl: ageMatch ? absoluteUrl(htmlDecode(ageMatch[1])) : null,
       commentHtml,
@@ -338,6 +347,7 @@ Options:
   --max-pages <count>         Maximum pages per resource, 0 = unlimited (default: 0)
   --max-retries <count>       Retries for 429/5xx/network errors (default: 3)
   --retry-base-ms <ms>        Base retry backoff in milliseconds (default: 2000)
+  --refresh                   Delete existing scraper data and rescrape everything
   --help                      Show this help text
 `);
 }
@@ -349,6 +359,7 @@ function parseCliArgs(argv: string[]): RuntimeOptions {
     maxPages: 0,
     maxRetries: 3,
     retryBaseMs: 2000,
+    refresh: false,
     showHelp: false,
   };
 
@@ -358,6 +369,11 @@ function parseCliArgs(argv: string[]): RuntimeOptions {
 
     if (arg === "--help") {
       options.showHelp = true;
+      continue;
+    }
+
+    if (arg === "--refresh") {
+      options.refresh = true;
       continue;
     }
 
@@ -591,6 +607,13 @@ function saveComments(db: Database, comments: CommentRecord[]) {
   }
 }
 
+function clearScrapedData(db: Database): void {
+  db.exec(`
+    DELETE FROM submissions;
+    DELETE FROM comments;
+  `);
+}
+
 function splitAtExisting<T extends { itemId: number }>(
   records: T[],
   hasExistingRecord: (itemId: number) => boolean,
@@ -686,8 +709,13 @@ async function main() {
   console.log(
     `Starting scrape for HN user ${username} -> ${runtimeOptions.dbPath} `
     + `(delay=${runtimeOptions.requestDelayMs}ms, maxPages=${runtimeOptions.maxPages || "all"}, `
-    + `maxRetries=${runtimeOptions.maxRetries}, retryBase=${runtimeOptions.retryBaseMs}ms)`
+    + `maxRetries=${runtimeOptions.maxRetries}, retryBase=${runtimeOptions.retryBaseMs}ms, `
+    + `refresh=${runtimeOptions.refresh ? "true" : "false"})`
   );
+  if (runtimeOptions.refresh) {
+    console.log("Refresh mode enabled: clearing existing scraper data.");
+    clearScrapedData(db);
+  }
   console.log("Logging into Hacker News...");
   await login(cookieJar, username, password, runtimeOptions);
   console.log("Login succeeded.");
@@ -699,10 +727,16 @@ async function main() {
     runtimeOptions,
     (html) => {
       const submissions = parseSubmissions(html, scrapedAt);
-      const pageResult = splitAtExisting(
-        submissions,
-        (itemId) => Boolean(submissionExists.get(itemId)),
-      );
+      const pageResult = runtimeOptions.refresh
+        ? {
+            newRecords: submissions,
+            savedCount: submissions.length,
+            encounteredExisting: false,
+          }
+        : splitAtExisting(
+            submissions,
+            (itemId) => Boolean(submissionExists.get(itemId)),
+          );
       if (pageResult.newRecords.length > 0) {
         saveSubmissions(db, pageResult.newRecords);
       }
@@ -719,10 +753,16 @@ async function main() {
     runtimeOptions,
     (html) => {
       const comments = parseComments(html, scrapedAt);
-      const pageResult = splitAtExisting(
-        comments,
-        (itemId) => Boolean(commentExists.get(itemId)),
-      );
+      const pageResult = runtimeOptions.refresh
+        ? {
+            newRecords: comments,
+            savedCount: comments.length,
+            encounteredExisting: false,
+          }
+        : splitAtExisting(
+            comments,
+            (itemId) => Boolean(commentExists.get(itemId)),
+          );
       if (pageResult.newRecords.length > 0) {
         saveComments(db, pageResult.newRecords);
       }
