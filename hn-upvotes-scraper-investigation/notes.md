@@ -127,3 +127,6 @@
 
 ## 2026-03-03 23:15:00 AEST
 - Removed the custom env loader and now rely on Bun native .env handling directly via process.env.
+
+## 2026-03-03 23:16:00 AEST
+- User requested ignoring all .sqlite files and deleting the existing hn-upvotes.sqlite file.

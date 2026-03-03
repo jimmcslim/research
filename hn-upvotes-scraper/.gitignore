@@ -1,2 +1,2 @@
-hn-upvotes.sqlite
+*.sqlite
 node_modules/
