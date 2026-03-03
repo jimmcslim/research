@@ -125,7 +125,7 @@ function extractMoreLink(html: string): string | null {
 
 function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
   const records: SubmissionRecord[] = [];
-  const rowRegex = /<tr\s+class=['"]athing['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>\s*<tr[^>]*>[\s\S]*?<td\s+class=['"]subtext['"][\s\S]*?<\/td>[\s\S]*?<\/tr>/gi;
+  const rowRegex = /<tr\s+class=['"][^'"]*\bathing\b[^'"]*['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>\s*<tr[^>]*>[\s\S]*?<td\s+class=['"]subtext['"][\s\S]*?<\/td>[\s\S]*?<\/tr>/gi;
 
   for (const blockMatch of html.matchAll(rowRegex)) {
     const block = blockMatch[0];
@@ -166,7 +166,7 @@ function parseSubmissions(html: string, scrapedAt: string): SubmissionRecord[] {
 
 function parseComments(html: string, scrapedAt: string): CommentRecord[] {
   const records: CommentRecord[] = [];
-  const commentRegex = /<tr\s+class=['"]athing['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>/gi;
+  const commentRegex = /<tr\s+class=['"][^'"]*\bathing\b[^'"]*['"][^>]*id=['"](\d+)['"][\s\S]*?<\/tr>/gi;
 
   for (const match of html.matchAll(commentRegex)) {
     const block = match[0];

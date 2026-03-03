@@ -68,3 +68,10 @@
 
 ## 2026-03-03 20:36:56 AEST
 - Added `--help` with usage text and made it return before credential validation or network work.
+
+## 2026-03-03 20:44:08 AEST
+- User supplied a saved `sample.html` from the submissions page to debug why submission parsing returns zero rows.
+
+## 2026-03-03 20:44:29 AEST
+- Root cause for zero submission rows: the parser required `class="athing"` exactly, but live submission rows are `class="athing submission"`.
+- Relaxed both submission and comment row regexes to match `athing` as a class token instead of an exact class value.
