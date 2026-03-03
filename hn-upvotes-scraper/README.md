@@ -6,6 +6,7 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
 
 - Authenticates using `HN_USERNAME` and `HN_PASSWORD`
 - Reads credentials from environment variables and also from `.env`
+- Parses Hacker News HTML with `cheerio`
 - Supports configurable request throttling via `--request-delay-ms` (defaults to `1000`)
 - Supports capped runs via `--max-pages` (defaults to unlimited)
 - Supports retry/backoff via `--max-retries` and `--retry-base-ms`
@@ -19,30 +20,18 @@ This folder contains a command-line scraper that logs into Hacker News, fetches 
   - `submissions`
   - `comments`
 
-## Implementation details
+## Structure
 
-- Runtime: **Bun**
-- Language: **TypeScript**
-- Storage: **SQLite via `bun:sqlite`**
-- Parsing: lightweight HTML extraction with resilient regex selectors tuned for HN markup
-- Auth/session handling: custom cookie jar over `fetch`
-- Login handling: supports current HN login form where hidden `fnid` may be absent; includes it when present
-
-## Research notes on existing libraries/tools
-
-I investigated the request for libraries specific to scraping HN upvoted content and the linked gist (`VehpuS/d70dc3669d96da953c7a4f9f6665e83d`).
-
-- In this execution environment, outbound HTTP requests to HN/Gist returned `403 Forbidden`, so I could not directly inspect the gist contents live.
-- Based on known ecosystem patterns, there is no widely used dedicated package specifically for **authenticated** scraping of HN upvoted submissions/comments.
-- Most available HN packages target Algolia’s public search API or generic HN data APIs, which do not expose private authenticated “upvoted” pages.
-- Given that limitation, this implementation uses direct session-authenticated scraping of HN HTML pages.
-
-## Files
-
-- `src/index.ts` — scraper CLI implementation
-- `package.json` — Bun script (`bun run scrape`)
-- `tsconfig.json` — TypeScript config
-- `notes.md` — running investigation notes
+- `src/index.ts` — thin entrypoint
+- `src/cli.ts` — CLI options/help parsing
+- `src/env.ts` — credential loading from `.env`
+- `src/http.ts` — cookie jar, request, retry helpers
+- `src/auth.ts` — HN login flow
+- `src/parsers.ts` — pure HTML parsing with Cheerio
+- `src/db.ts` — SQLite schema, migration, persistence helpers
+- `src/sync.ts` — pagination and incremental sync orchestration
+- `src/types.ts` — shared types
+- `test/*.test.ts` — Bun tests for parser, CLI, and sync behavior
 
 ## Usage
 
@@ -69,8 +58,13 @@ bun run scrape -- \
   --request-delay-ms 1000 \
   --max-pages 0 \
   --max-retries 3 \
-  --retry-base-ms 2000 \
-  --refresh
+  --retry-base-ms 2000
+```
+
+To fully rebuild local scraper data:
+
+```bash
+bun run scrape -- --refresh
 ```
 
 To see CLI help:
@@ -79,9 +73,7 @@ To see CLI help:
 bun run scrape -- --help
 ```
 
-4. Inspect resulting SQLite file (`hn-upvotes.sqlite` by default).
-
-### Runtime controls
+## Runtime controls
 
 - `--db-path`: SQLite output path
 - `--request-delay-ms`: base delay before each request
@@ -90,6 +82,15 @@ bun run scrape -- --help
 - `--retry-base-ms`: base backoff delay in milliseconds; doubles on each retry unless `Retry-After` is present
 - `--refresh`: delete existing local scraper data and process all pages again
 - `--help`: print usage information
+
+## Tests
+
+```bash
+bun run typecheck
+bun test
+```
+
+The parser tests are fixture-based and validate the pure HTML-to-record functions separately from SQLite writes.
 
 ## Database schema
 

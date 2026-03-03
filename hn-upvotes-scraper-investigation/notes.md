@@ -117,3 +117,10 @@
 
 ## 2026-03-03 22:48:56 AEST
 - Tightened the `submitted_by` fix further: HN can split closing user links as `</a` followed by whitespace/newline before `>`, so the parser now accepts `</a\\s*>`.
+
+## 2026-03-03 23:05:06 AEST
+- Began Cheerio refactor implementation: installing parser dependency and inspecting current fixture coverage before splitting modules.
+
+## 2026-03-03 23:08:01 AEST
+- Split the monolithic entrypoint into parser, DB, CLI, env, auth/http, sync, and types modules.
+- Added Bun tests for fixture-based parsing, CLI parsing, and incremental stop-on-existing behavior.
